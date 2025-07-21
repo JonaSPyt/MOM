@@ -78,6 +78,10 @@ class MOMGameServer:
             elif msg_type == 'surrender':
                 player_id = message.get('player_id')
                 self.surrender(player_id)
+            elif msg_type == 'chat_message': # Adicionado para processar mensagens de chat
+                sender = message.get('sender')
+                content = message.get('content')
+                self._publish_chat_message(sender, content)
             else:
                 print(f"Mensagem de cliente desconhecida: {message}")
         except json.JSONDecodeError:
@@ -147,109 +151,107 @@ class MOMGameServer:
                 self.fase = 2
                 self.bloqueio_central = False
                 self.inicializar_centro()
-            
+
             self._publish_game_state()
             return True
 
-    def verificar_movimento_valido(self, origem, destino):
-        origem_linha, origem_coluna = origem
-        destino_linha, destino_coluna = destino
-
-        if origem_linha != destino_linha and origem_coluna != destino_coluna:
-            return False
-
-        passo_linha = 0 if origem_linha == destino_linha else (1 if destino_linha > origem_linha else -1)
-        passo_coluna = 0 if origem_coluna == destino_coluna else (1 if destino_coluna > origem_coluna else -1)
-        
-        x, y = origem_linha + passo_linha, origem_coluna + passo_coluna
-        while (x, y) != (destino_linha, destino_coluna):
-            if self.tabuleiro[x][y] != '-' and (x,y) != origem:
-                return False
-            x += passo_linha
-            y += passo_coluna
-
-        return self.tabuleiro[destino_linha][destino_coluna] == '-'
-
     def move_piece(self, origem, destino, player_id):
         with self.game_lock:
-            if self.fase != 2 or self.jogador_atual != player_id:
+            if self.jogador_atual != player_id or self.fase != 2:
                 return False
 
-            if not self.verificar_movimento_valido(origem, destino):
+            linha_origem, coluna_origem = origem
+            linha_destino, coluna_destino = destino
+
+            if not self.coordenadas_validas(linha_origem, coluna_origem) or not self.coordenadas_validas(linha_destino, coluna_destino):
                 return False
 
-            peça = self.tabuleiro[origem[0]][origem[1]]
-            self.tabuleiro[origem[0]][origem[1]] = '-'
-            self.tabuleiro[destino[0]][destino[1]] = peça
+            peça = self.tabuleiro[linha_origem][coluna_origem]
+            if peça == '-' or self.tabuleiro[linha_destino][coluna_destino] != '-':
+                return False
 
-            capturas = self.verificar_capturas_sanduiche(destino)
-            for x, y in capturas:
-                self.tabuleiro[x][y] = '-'
-                if self.jogador_atual == 'P1':
-                    self.peças_tabuleiro_p2 -= 1
-                else:
-                    self.peças_tabuleiro_p1 -= 1
+            if (player_id == 'P1' and peça != 'P') or (player_id == 'P2' and peça != 'B'):
+                return False
+
+            if not self.movimento_valido(origem, destino):
+                return False
+
+            self.tabuleiro[linha_origem][coluna_origem] = '-'
+            self.tabuleiro[linha_destino][coluna_destino] = peça
+
+            capturas = self.verificar_capturas(destino, player_id)
+            if capturas:
+                self.ultima_peça_capturadora = destino
+                for cap_linha, cap_coluna in capturas:
+                    self.tabuleiro[cap_linha][cap_coluna] = '-'
+                    if player_id == 'P1':
+                        self.peças_tabuleiro_p2 -= 1
+                    else:
+                        self.peças_tabuleiro_p1 -= 1
 
             self.verificar_vencedor()
             if not capturas:
                 self.mudar_jogador()
-            else:
-                self.ultima_peça_capturadora = destino
-            
+
             self._publish_game_state()
             return True
 
-    def verificar_capturas_sanduiche(self, destino):
+    def movimento_valido(self, origem, destino):
+        linha_origem, coluna_origem = origem
+        linha_destino, coluna_destino = destino
+
+        if linha_origem == linha_destino:
+            inicio, fim = min(coluna_origem, coluna_destino), max(coluna_origem, coluna_destino)
+            for col in range(inicio + 1, fim):
+                if self.tabuleiro[linha_origem][col] != '-':
+                    return False
+        elif coluna_origem == coluna_destino:
+            inicio, fim = min(linha_origem, linha_destino), max(linha_origem, linha_destino)
+            for lin in range(inicio + 1, fim):
+                if self.tabuleiro[lin][coluna_origem] != '-':
+                    return False
+        else:
+            return False
+
+        return True
+
+    def verificar_capturas(self, posicao, player_id):
+        linha, coluna = posicao
         capturas = []
-        jogador = 'P' if self.jogador_atual == 'P1' else 'B'
-        inimigo = 'B' if jogador == 'P' else 'P'
-        direcoes = [(-1,0), (1,0), (0,-1), (0,1)]
-        
-        for dx, dy in direcoes:
-            x, y = destino[0] + dx, destino[1] + dy
-            x2, y2 = x + dx, y + dy
-            if self.coordenadas_validas(x, y) and self.coordenadas_validas(x2, y2):
-                if self.tabuleiro[x][y] == inimigo and self.tabuleiro[x2][y2] == jogador:
-                    capturas.append((x, y))
+        peça_jogador = 'P' if player_id == 'P1' else 'B'
+        peça_oponente = 'B' if player_id == 'P1' else 'P'
+
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            captura_linha = []
+            x, y = linha + dx, coluna + dy
+
+            while self.coordenadas_validas(x, y) and self.tabuleiro[x][y] == peça_oponente:
+                captura_linha.append((x, y))
+                x, y = x + dx, y + dy
+
+            if self.coordenadas_validas(x, y) and self.tabuleiro[x][y] == peça_jogador and captura_linha:
+                capturas.extend(captura_linha)
+
         return capturas
+
+    def verificar_vencedor(self):
+        if self.peças_tabuleiro_p1 <= 2:
+            self.vencedor = 'P2'
+        elif self.peças_tabuleiro_p2 <= 2:
+            self.vencedor = 'P1'
 
     def mudar_jogador(self):
         self.jogador_atual = 'P2' if self.jogador_atual == 'P1' else 'P1'
-        self.ultima_peça_capturadora = None
 
-    def verificar_vencedor(self):
-        if self.peças_tabuleiro_p1 == 0:
-            self.vencedor = 'P2'
-        elif self.peças_tabuleiro_p2 == 0:
-            self.vencedor = 'P1'
-
-    def send_chat_message(self, sender, message):
+    def surrender(self, player_id):
         with self.game_lock:
-            full_message = f'{sender}: {message}'
-            self.chat_history.append(full_message)
-            self._publish_chat_message(sender, message)
-            print(f"Chat: {full_message}")
+            if player_id in self.players:
+                self.vencedor = 'P2' if player_id == 'P1' else 'P1'
+                self._publish_game_state()
+                self._publish_chat_message('Server', f'{self.players[player_id]} desistiu. {self.players[self.vencedor]} venceu!')
 
     def _publish_game_state(self):
-        state = {
-            'tabuleiro': self.tabuleiro,
-            'jogador_atual': self.jogador_atual,
-            'fase': self.fase,
-            'vencedor': self.vencedor,
-            'pecas_p1': self.peças_p1,
-            'pecas_p2': self.peças_p2,
-            'board_pieces_p1': self.peças_tabuleiro_p1,
-            'board_pieces_p2': self.peças_tabuleiro_p2,
-            'players': self.players
-        }
-        self.channel.basic_publish(
-            exchange=self.game_state_topic,
-            routing_key='',
-            body=json.dumps({'type': 'game_state', 'content': state})
-        )
-
-    def _send_game_state_to_player(self, player_name):
-        state = {
+        game_state = {
             'tabuleiro': self.tabuleiro,
             'jogador_atual': self.jogador_atual,
             'fase': self.fase,
@@ -262,55 +264,62 @@ class MOMGameServer:
         }
         message = {
             'type': 'game_state',
-            'content': state
+            'content': game_state
         }
         self.channel.basic_publish(
-            exchange='',
-            routing_key=f"user_queue_{player_name}",
-            body=json.dumps(message),
-            properties=pika.BasicProperties(delivery_mode=2) # make message persistent
+            exchange=self.game_state_topic,
+            routing_key='',
+            body=json.dumps(message)
         )
 
-    def _publish_chat_message(self, sender, message):
-        msg = {
-            'sender': sender,
+    def _send_game_state_to_player(self, player_name):
+        game_state = {
+            'tabuleiro': self.tabuleiro,
+            'jogador_atual': self.jogador_atual,
+            'fase': self.fase,
+            'vencedor': self.vencedor,
+            'pecas_p1': self.peças_p1,
+            'pecas_p2': self.peças_p2,
+            'board_pieces_p1': self.peças_tabuleiro_p1,
+            'board_pieces_p2': self.peças_tabuleiro_p2,
+            'players': self.players
+        }
+        message = {
+            'type': 'game_state',
+            'content': game_state
+        }
+        user_queue_name = f"user_queue_{player_name}"
+        self.channel.basic_publish(
+            exchange='',
+            routing_key=user_queue_name,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+
+    def _publish_chat_message(self, sender, content):
+        message = {
             'type': 'chat_message',
-            'content': message
+            'sender': sender,
+            'content': content
         }
         self.channel.basic_publish(
             exchange=self.chat_topic,
             routing_key='',
-            body=json.dumps(msg)
+            body=json.dumps(message)
         )
 
-    def surrender(self, player_id):
-        with self.game_lock:
-            if player_id == 'P1':
-                self.vencedor = 'P2'
-            elif player_id == 'P2':
-                self.vencedor = 'P1'
-            
-            player_name = self.players.get(player_id, f"Jogador {player_id}")
-            surrender_message = f'{player_name} desistiu da partida!'
-            self.chat_history.append(surrender_message)
-            self._publish_chat_message('Server', surrender_message)
-            self._publish_game_state()
-            print(f"Jogador {player_id} ({player_name}) desistiu")
-
-    def close(self):
-        self.connection.close()
-
+    def run(self):
+        print("Servidor Seega MOM (RabbitMQ) pronto.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Encerrando servidor...")
+        finally:
+            self.connection.close()
 
 if __name__ == '__main__':
     server = MOMGameServer()
-    print("Servidor Seega MOM (RabbitMQ) pronto.")
-    
-    # Keep the server running. The server will consume messages in a separate thread.
-    try:
-        while True:
-            time.sleep(1) # Keep main thread alive
-    except KeyboardInterrupt:
-        print("Encerrando servidor.")
-        server.close()
+    server.run()
 
 

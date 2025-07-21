@@ -7,9 +7,9 @@ from pygame.locals import *
 from mom_client import MOMClient # Importar o cliente MOM
 
 # Configurações gráficas
-LARGURA = 600
-ALTURA = 850 # Altura ajustada para integrar UI e chat
-TAMANHO_CELULA = 120
+LARGURA = 1280 # Largura para 720p
+ALTURA = 720 # Altura para 720p
+TAMANHO_CELULA = 80 # Reduzir o tamanho da célula para o tabuleiro 5x5 (400x400) para caber melhor na tela
 TAMANHO_TABULEIRO = 5
 
 CORES = {
@@ -185,7 +185,13 @@ class ClienteSeega:
         self.mom_client.send_message_to_user('game_server_queue', json.dumps(message))
 
     def enviar_chat(self, texto):
-        self.mom_client.publish_to_topic('chat_messages', texto)
+        # Enviar mensagem de chat para o servidor MOM
+        message = {
+            'type': 'chat_message',
+            'sender': self.nome,
+            'content': texto
+        }
+        self.mom_client.send_message_to_user('game_server_queue', json.dumps(message))
 
     def surrender_game(self):
         message = {
@@ -201,7 +207,7 @@ class ClienteSeega:
         for i in range(5):
             for j in range(5):
                 # Verifica se a peça na posição (i, j) pertence ao jogador atual
-                if self.estado['tabuleiro'][i][j] == ('P' if self.jogador_id == 'P1' else 'B'):
+                if self.estado['tabuleiro'][i][j] == ('P' if self.jogador_id=='P1' else 'B'):
                     # Itera sobre as 4 direções (cima, baixo, esquerda, direita)
                     for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
                         dist = 1
@@ -216,33 +222,41 @@ class ClienteSeega:
 
     def desenhar_tabuleiro(self, tela):
         tela.fill(CORES['MARROM_CLARO'])
+        # O tabuleiro de 5x5 com células de 80x80 pixels ocupa 400x400 pixels.
+        # Centralizar o tabuleiro na nova largura da tela.
+        offset_x = (LARGURA - (TAMANHO_TABULEIRO * TAMANHO_CELULA)) // 2
+        offset_y = (ALTURA - (TAMANHO_TABULEIRO * TAMANHO_CELULA)) // 2 - 60 # Ajuste para subir um pouco o tabuleiro
+
         for i in range(5):
             for j in range(5):
                 cor = CORES['MARROM_CLARO'] if (i+j) % 2 == 0 else CORES['MARROM']
-                pygame.draw.rect(tela, cor, (j*TAMANHO_CELULA, i*TAMANHO_CELULA, TAMANHO_CELULA, TAMANHO_CELULA))
+                pygame.draw.rect(tela, cor, (offset_x + j*TAMANHO_CELULA, offset_y + i*TAMANHO_CELULA, TAMANHO_CELULA, TAMANHO_CELULA))
                 c = self.estado['tabuleiro'][i][j]
-                centro = (j*TAMANHO_CELULA + TAMANHO_CELULA//2, i*TAMANHO_CELULA + TAMANHO_CELULA//2)
+                centro = (offset_x + j*TAMANHO_CELULA + TAMANHO_CELULA//2, offset_y + i*TAMANHO_CELULA + TAMANHO_CELULA//2)
                 if c == 'P':
                     pygame.draw.circle(tela, CORES['PRETO'], centro, 25)
                 elif c == 'B':
                     pygame.draw.circle(tela, CORES['BRANCO'], centro, 25)
                 elif c == 'X':
-                    pygame.draw.rect(tela, CORES['CINZA_ESCURO'], (j*TAMANHO_CELULA, i*TAMANHO_CELULA, TAMANHO_CELULA, TAMANHO_CELULA))
+                    pygame.draw.rect(tela, CORES['CINZA_ESCURO'], (offset_x + j*TAMANHO_CELULA, offset_y + i*TAMANHO_CELULA, TAMANHO_CELULA, TAMANHO_CELULA))
                 if self.selecionado == (i, j):
-                    pygame.draw.rect(tela, CORES['AMARELO'], (j*TAMANHO_CELULA+3, i*TAMANHO_CELULA+3, TAMANHO_CELULA-6, TAMANHO_CELULA-6), 3)
+                    pygame.draw.rect(tela, CORES['AMARELO'], (offset_x + j*TAMANHO_CELULA+3, offset_y + i*TAMANHO_CELULA+3, TAMANHO_CELULA-6, TAMANHO_CELULA-6), 3)
 
     def desenhar_ui(self, tela):
         fonte = pygame.font.Font(None, 30)
         
+        # Posições da UI ajustadas para a nova resolução
+        ui_start_y = (ALTURA // 2 - (TAMANHO_TABULEIRO * TAMANHO_CELULA) // 2 - 60) + (TAMANHO_TABULEIRO * TAMANHO_CELULA) + 20 # Posição relativa ao tabuleiro
+
         # Nome e ID local
         texto_jogador = fonte.render(f"Jogador: {self.nome} ({self.jogador_id})", True, CORES['AZUL'])
-        tela.blit(texto_jogador, (10, 610))
+        tela.blit(texto_jogador, (10, ui_start_y + 10))
         
         # Fase e peças
         texto_fase = fonte.render(f"Fase: {self.estado['fase']}", True, CORES['VERMELHO'])
-        tela.blit(texto_fase, (10, 640))
+        tela.blit(texto_fase, (10, ui_start_y + 40))
         texto_pecas = fonte.render(f"Peças: P1={self.estado['pecas_p1']} | P2={self.estado['pecas_p2']}", True, CORES['PRETO'])
-        tela.blit(texto_pecas, (10, 670))
+        tela.blit(texto_pecas, (10, ui_start_y + 70))
         
         # Turno atual (exibe id)
         atual = self.estado['jogador_atual']
@@ -253,15 +267,15 @@ class ClienteSeega:
             oponente_nome = self.estado['players'].get(oponente_id, atual) 
             turno_txt = f"Turno de: {oponente_nome}"
         texto_turno = fonte.render(turno_txt, True, CORES['VERDE'])
-        tela.blit(texto_turno, (300, 610))
+        tela.blit(texto_turno, (LARGURA // 2 + 100, ui_start_y + 10)) # Ajustado para a direita
         
         # Vencedor
         if self.estado.get('vencedor'):
             txt_v = fonte.render(f"Vencedor: {self.estado['vencedor']}!", True, CORES['VERDE'])
-            tela.blit(txt_v, (LARGURA//2 - 100, ALTURA//2 - 20))
+            tela.blit(txt_v, (LARGURA//2 - txt_v.get_width()//2, ALTURA//2 - 20))
 
         # Botão Desistir
-        btn_desistir_rect = pygame.Rect(LARGURA - 120, 700, 100, 40) # Mover para baixo para 700
+        btn_desistir_rect = pygame.Rect(LARGURA - 150, ui_start_y + 60, 100, 40) # Ajustado para a direita e abaixo
         pygame.draw.rect(tela, CORES['VERMELHO_CLARO'], btn_desistir_rect)
         fonte_pequena = pygame.font.Font(None, 24)
         texto_desistir = fonte_pequena.render("DESISTIR", True, CORES['BRANCO'])
@@ -269,7 +283,7 @@ class ClienteSeega:
         tela.blit(texto_desistir, texto_desistir_rect)
 
         # Área do chat integrada
-        chat_y_start = 750 # Início da área do chat
+        chat_y_start = ui_start_y + 120 # Início da área do chat, abaixo dos botões
         pygame.draw.rect(tela, CORES['CINZA'], (0, chat_y_start, LARGURA, ALTURA - chat_y_start)) # Fundo do chat
         
         chat_font = pygame.font.Font(None, 24)
@@ -282,40 +296,58 @@ class ClienteSeega:
         tela.blit(input_text_surface, (15, input_chat_y + 5))
 
         # Exibir as últimas mensagens do chat acima do campo de input
-        chat_message_y = input_chat_y - 20 # Começa 20 pixels acima do input
+        chat_message_y = input_chat_y - 5 # Começa um pouco acima do input
         for msg in reversed(self.chat):
             chat_text_surface = chat_font.render(msg, True, CORES['BRANCO'])
             text_height = chat_text_surface.get_height()
             if chat_message_y - text_height < chat_y_start + 10: # Se a mensagem for muito alta, pare
                 break
             tela.blit(chat_text_surface, (10, chat_message_y - text_height))
-            chat_message_y -= 20 # Espaçamento entre as mensagens
-
-    def desenhar_chat(self, tela): # Esta função não será mais usada, mas mantida por enquanto
-        pass
+            chat_message_y -= (text_height + 5) # Espaçamento entre as mensagens
 
     def handle_clique(self, pos):
         x, y = pos
         
+        # Recalcular offset do tabuleiro para cliques
+        offset_x = (LARGURA - (TAMANHO_TABULEIRO * TAMANHO_CELULA)) // 2
+        offset_y = (ALTURA - (TAMANHO_TABULEIRO * TAMANHO_CELULA)) // 2 - 60
+
         # Clique no botão DESISTIR
-        btn_desistir_rect = pygame.Rect(LARGURA - 120, 700, 100, 40) # Usar as mesmas coordenadas do desenho do botão
-        if btn_desistir_rect.collidepoint(x, y): # Usar collidepoint para verificar clique
+        ui_start_y = (ALTURA // 2 - (TAMANHO_TABULEIRO * TAMANHO_CELULA) // 2 - 60) + (TAMANHO_TABULEIRO * TAMANHO_CELULA) + 20
+        btn_desistir_rect = pygame.Rect(LARGURA - 150, ui_start_y + 60, 100, 40)
+        if btn_desistir_rect.collidepoint(x, y):
             self.surrender_game()
             return
 
-        # Ajustar a área clicável do tabuleiro para não incluir a área da UI/chat
-        if y > (TAMANHO_TABULEIRO * TAMANHO_CELULA) or self.estado.get('vencedor'): # Limite superior da área de UI/chat
+        # Verificar se o clique foi dentro da área do tabuleiro
+        tabuleiro_rect = pygame.Rect(offset_x, offset_y, TAMANHO_TABULEIRO * TAMANHO_CELULA, TAMANHO_TABULEIRO * TAMANHO_CELULA)
+        if not tabuleiro_rect.collidepoint(x, y) or self.estado.get('vencedor'):
             return
-        lin, col = y // TAMANHO_CELULA, x // TAMANHO_CELULA
+        
+        # Ajustar as coordenadas do clique para o sistema de coordenadas do tabuleiro
+        click_x_rel = x - offset_x
+        click_y_rel = y - offset_y
+
+        lin, col = int(click_y_rel // TAMANHO_CELULA), int(click_x_rel // TAMANHO_CELULA)
+
+        # Adicionado print para depuração
+        print(f"Clique em: ({x}, {y}) -> Célula: ({lin}, {col})")
+
         if self.estado['fase'] == 1 and self.jogador_id == self.estado['jogador_atual']:
             self.enviar_movimento('colocacao', None, (lin, col))
         elif self.estado['fase'] == 2 and self.jogador_id == self.estado['jogador_atual']:
             if not self.selecionado:
                 if self.estado['tabuleiro'][lin][col] == ('P' if self.jogador_id=='P1' else 'B'):
                     self.selecionado = (lin, col)
+                    print(f"Peça selecionada: {self.selecionado}")
+                else:
+                    print("Nenhuma peça sua nesta posição.")
             else:
                 if (lin, col) in self.movimentos_validos:
                     self.enviar_movimento('movimento', self.selecionado, (lin, col))
+                    print(f"Movendo de {self.selecionado} para {(lin, col)}")
+                else:
+                    print("Movimento inválido.")
                 self.selecionado = None
 
     def iniciar_interface(self):
@@ -332,17 +364,26 @@ class ClienteSeega:
                     pygame.quit()
                     sys.exit()
                 if evento.type == MOUSEBUTTONDOWN:
-                    self.handle_clique(evento.pos)
-                    # Ajustar a área de clique para ativar o chat
-                    chat_ativo = evento.pos[1] > (TAMANHO_TABULEIRO * TAMANHO_CELULA) + 140 # Ajustado para a nova posição do chat
-                if evento.type == KEYDOWN and chat_ativo:
-                    if evento.key == K_RETURN and self.input_chat.strip():
-                        self.enviar_chat(self.input_chat)
-                        self.input_chat = ''
-                    elif evento.key == K_BACKSPACE:
-                        self.input_chat = self.input_chat[:-1]
+                    # Verificar se o clique foi na área do chat para ativar o input
+                    input_chat_height = 30
+                    input_chat_y = ALTURA - input_chat_height - 10
+                    
+                    if evento.pos[1] >= input_chat_y and evento.pos[1] <= input_chat_y + input_chat_height:
+                        chat_ativo = True
+                        print("Chat ativado.")
                     else:
-                        self.input_chat += evento.unicode
+                        chat_ativo = False
+                        self.handle_clique(evento.pos) # Processar clique no jogo se não for no chat
+
+                if evento.type == KEYDOWN:
+                    if chat_ativo:
+                        if evento.key == K_RETURN and self.input_chat.strip():
+                            self.enviar_chat(self.input_chat)
+                            self.input_chat = ''
+                        elif evento.key == K_BACKSPACE:
+                            self.input_chat = self.input_chat[:-1]
+                        else:
+                            self.input_chat += evento.unicode
             self.desenhar_tabuleiro(tela)
             self.desenhar_ui(tela)
             pygame.display.flip()

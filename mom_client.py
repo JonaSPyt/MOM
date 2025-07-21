@@ -19,6 +19,21 @@ class MOMClient:
             self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.host))
             self.channel = self.connection.channel()
             self.channel.queue_declare(queue=self.user_queue, durable=True)
+            
+            # Subscribe to game state updates topic
+            self.channel.exchange_declare(exchange='game_state_updates', exchange_type='fanout', durable=True)
+            result = self.channel.queue_declare(queue="", exclusive=True)
+            game_state_queue = result.method.queue
+            self.channel.queue_bind(exchange='game_state_updates', queue=game_state_queue)
+            self.channel.basic_consume(queue=game_state_queue, on_message_callback=self._process_message, auto_ack=True)
+            
+            # Subscribe to chat messages topic
+            self.channel.exchange_declare(exchange='chat_messages', exchange_type='fanout', durable=True)
+            result = self.channel.queue_declare(queue="", exclusive=True)
+            chat_queue = result.method.queue
+            self.channel.queue_bind(exchange='chat_messages', queue=chat_queue)
+            self.channel.basic_consume(queue=chat_queue, on_message_callback=self._process_message, auto_ack=True)
+            
             self.connected = True
             print(f"Cliente {self.username} conectado ao broker MOM.")
             return True
@@ -33,24 +48,18 @@ class MOMClient:
             self.connected = False
             print(f"Cliente {self.username} desconectado do broker MOM.")
 
-    def send_message_to_user(self, target_username, message_content):
+    def send_message_to_user(self, target_queue, message_content):
         if not self.connected:
             print("Cliente não conectado ao broker.")
             return
         try:
-            target_queue = f"user_queue_{target_username}"
-            message = {
-                "sender": self.username,
-                "type": "direct_message",
-                "content": message_content
-            }
             self.channel.basic_publish(
                 exchange="",
                 routing_key=target_queue,
-                body=json.dumps(message),
+                body=message_content,
                 properties=pika.BasicProperties(delivery_mode=2) # make message persistent
             )
-            print(f"Mensagem direta de {self.username} para {target_username} enviada.")
+            print(f"Mensagem direta de {self.username} para {target_queue} enviada.")
         except Exception as e:
             print(f"Erro ao enviar mensagem direta: {e}")
 
@@ -83,8 +92,6 @@ class MOMClient:
             self.channel.queue_bind(exchange=topic_name, queue=queue_name)
             self.channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
             print(f"Cliente {self.username} inscrito no tópico {topic_name}.")
-            # Start consuming in a separate thread to avoid blocking
-            threading.Thread(target=self.channel.start_consuming, daemon=True).start()
         except Exception as e:
             print(f"Erro ao assinar tópico: {e}")
 
@@ -95,8 +102,6 @@ class MOMClient:
         try:
             self.channel.basic_consume(queue=self.user_queue, on_message_callback=callback, auto_ack=True)
             print(f"Cliente {self.username} começando a consumir da fila {self.user_queue}.")
-            # Start consuming in a separate thread to avoid blocking
-            threading.Thread(target=self.channel.start_consuming, daemon=True).start()
         except Exception as e:
             print(f"Erro ao iniciar consumo da fila do usuário: {e}")
 
@@ -166,7 +171,7 @@ if __name__ == "__main__":
         time.sleep(2) # Dar um tempo para as conexões e consumos se estabelecerem
 
         # Testar envio de mensagem direta
-        client1.send_message_to_user("usuario_teste2", "Olá, usuário 2! Esta é uma mensagem direta.")
+        client1.send_message_to_user("user_queue_usuario_teste2", json.dumps({"type": "direct_message", "sender": client1.username, "content": "Olá, usuário 2! Esta é uma mensagem direta."}))
         time.sleep(1)
 
         # Testar publicação em tópico
@@ -189,5 +194,4 @@ if __name__ == "__main__":
         finally:
             client1.disconnect()
             client2.disconnect()
-
 
